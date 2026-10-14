@@ -1,0 +1,2079 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>SKYBLOOM VOXEL — 天空のボクセル・パルクールFPS</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=M+PLUS+Rounded+1c:wght@500;700;800&display=swap" rel="stylesheet">
+  <style>
+    * {
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #1e88e5;
+      font-family: 'M PLUS Rounded 1c', 'Inter', sans-serif;
+    }
+    #game-container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+    }
+    #webgl-canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      cursor: crosshair;
+    }
+    /* Subtle peripheral framing without washing out midtones or shadows */
+    .sun-vignette {
+      pointer-events: none;
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(circle at 50% 50%, rgba(0, 0, 0, 0) 68%, rgba(15, 23, 42, 0.18) 100%);
+      z-index: 2;
+    }
+    /* Speed lines overlay when wind-boosting */
+    #speed-lines {
+      pointer-events: none;
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      transition: opacity 0.18s ease-out;
+      background: radial-gradient(circle at center, transparent 58%, rgba(56, 189, 248, 0.32) 90%, rgba(255, 255, 255, 0.5) 100%);
+      z-index: 3;
+    }
+    .glass-panel {
+      background: rgba(255, 255, 255, 0.92);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 2px solid rgba(15, 23, 42, 0.12);
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.22);
+    }
+    .glass-pill {
+      background: rgba(15, 23, 42, 0.78);
+      color: #f8fafc;
+      backdrop-filter: blur(8px);
+      border: 1.5px solid rgba(255, 255, 255, 0.22);
+      box-shadow: 0 4px 14px rgba(15, 23, 42, 0.25);
+    }
+    .voxel-btn {
+      transition: transform 0.12s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.12s ease, background-color 0.15s ease;
+    }
+    .voxel-btn:hover {
+      transform: translateY(-2px);
+    }
+    .voxel-btn:active {
+      transform: translateY(1px) scale(0.97);
+    }
+    .crosshair-ring {
+      transition: transform 0.12s ease, border-color 0.15s ease;
+    }
+    #webgl-canvas, #touch-controls { touch-action: none; }
+    #welcome-modal > .glass-panel {
+      max-height: calc(100dvh - 2rem);
+      overflow-y: auto;
+    }
+    @media (any-pointer: coarse) {
+      #touch-controls { display: flex; }
+    }
+    @media (max-width: 639px) {
+      #game-container > .bottom-3 { flex-wrap: wrap; }
+      #game-container > .bottom-3 > .glass-pill { display: none; }
+      #game-container > .bottom-3 > .flex { width: 100%; }
+      #game-container > .bottom-3 > .flex > button {
+        flex: 1;
+        padding: 0.65rem 0.4rem;
+      }
+    }
+  </style>
+</head>
+<body class="text-slate-800">
+  <div id="game-container">
+    <canvas id="webgl-canvas"></canvas>
+    <div class="sun-vignette"></div>
+    <div id="speed-lines"></div>
+
+    <!-- High-Contrast Center Crosshair (Dark outer ring + bright inner dot so it never gets lost on bright clouds or sky) -->
+    <div id="crosshair-wrap" class="pointer-events-none absolute inset-0 flex items-center justify-center z-10">
+      <div class="relative flex items-center justify-center">
+        <div id="reticle-outer" class="crosshair-ring w-7 h-7 rounded-full border-2 border-slate-900/85 bg-slate-900/20 shadow-[0_0_0_1.5px_rgba(255,255,255,0.9)] flex items-center justify-center">
+          <div id="reticle-dot" class="w-2 h-2 rounded-full bg-amber-300 border border-slate-900"></div>
+        </div>
+        <div id="reticle-hint" class="hidden absolute top-9 whitespace-nowrap px-3 py-1 rounded-full text-xs font-extrabold bg-slate-900/90 text-amber-300 border border-amber-400/60 shadow-lg">
+          🎯 右クリック / E でグラップル！
+        </div>
+      </div>
+    </div>
+
+    <!-- Top HUD Bar (High-contrast dark-glass pills for effortless legibility against bright sky) -->
+    <header class="absolute top-0 left-0 right-0 z-20 p-2.5 sm:p-4 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
+      <!-- Left: Stage & Collectibles -->
+      <div class="flex flex-wrap items-center gap-2 pointer-events-auto">
+        <div class="glass-pill rounded-2xl px-3.5 py-1.5 flex items-center gap-2.5">
+          <span class="text-lg">🏝️</span>
+          <div>
+            <div class="text-[10px] font-bold uppercase tracking-wider text-sky-300 leading-none">CURRENT ISLAND</div>
+            <div id="hud-island-name" class="text-xs sm:text-sm font-extrabold text-white">1. はじまりの草原島</div>
+          </div>
+        </div>
+
+        <div class="glass-pill rounded-2xl px-3.5 py-1.5 flex items-center gap-3 text-xs sm:text-sm font-bold">
+          <div class="flex items-center gap-1 text-amber-300" title="集めた星のかけら">
+            <span class="text-base">⭐</span>
+            <span id="hud-stars">0</span><span class="text-slate-400">/</span><span id="hud-stars-total">15</span>
+          </div>
+          <div class="w-px h-4 bg-slate-600"></div>
+          <div class="flex items-center gap-1 text-pink-300" title="鳴らした風鈴ターゲット">
+            <span class="text-base">🎐</span>
+            <span id="hud-bells">0</span><span class="text-slate-400">/</span><span id="hud-bells-total">5</span>
+          </div>
+          <div class="w-px h-4 bg-slate-600"></div>
+          <div class="flex items-center gap-1 text-cyan-300 font-mono" title="タイム">
+            <span>⏱️</span>
+            <span id="hud-timer">00:00.0</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: Quick Controls & Visual Toggles -->
+      <div class="flex flex-wrap items-center gap-1.5 sm:gap-2 pointer-events-auto">
+        <button id="btn-contrast" type="button" class="voxel-btn glass-pill rounded-xl px-2.5 py-1.5 text-xs font-bold text-amber-300 hover:bg-slate-800 flex items-center gap-1" title="輪郭エッジ強調の切替">
+          <span>🔲</span>
+          <span id="edge-label" class="hidden md:inline">輪郭強調: 強</span>
+        </button>
+
+        <button id="btn-weather" type="button" class="voxel-btn glass-pill rounded-xl px-2.5 py-1.5 text-xs font-bold text-sky-200 hover:bg-slate-800 flex items-center gap-1" title="時間帯・ライティング切替">
+          <span id="weather-icon">☀️</span>
+          <span id="weather-label" class="hidden md:inline">晴天モーニング</span>
+        </button>
+
+        <button id="btn-peaceful-fly" type="button" class="voxel-btn glass-pill rounded-xl px-2.5 py-1.5 text-xs font-bold text-emerald-300 hover:bg-slate-800 flex items-center gap-1" title="落下なしの空中散歩モード切替 (Fキー)">
+          <span>🕊️</span>
+          <span id="fly-label">通常パルクール</span>
+        </button>
+
+        <button id="btn-warp-menu" type="button" class="voxel-btn glass-pill rounded-xl px-2.5 py-1.5 text-xs font-bold text-indigo-200 hover:bg-slate-800 flex items-center gap-1" title="チェックポイント移動">
+          <span>🧭</span>
+          <span class="hidden sm:inline">島ワープ</span>
+        </button>
+
+        <button id="btn-respawn" type="button" class="voxel-btn glass-pill rounded-xl px-2.5 py-1.5 text-xs font-bold text-amber-200 hover:bg-slate-800 flex items-center gap-1" title="チェックポイントに戻る (Rキー)">
+          <span>🔄</span>
+          <span class="hidden sm:inline">復帰(R)</span>
+        </button>
+
+        <button id="btn-audio" type="button" class="voxel-btn glass-pill rounded-xl px-2.5 py-1.5 text-xs font-bold text-white hover:bg-slate-800" title="サウンドON/OFF">
+          <span id="audio-icon">🔊</span>
+        </button>
+
+        <button id="btn-help" type="button" class="voxel-btn glass-pill rounded-xl px-2.5 py-1.5 text-xs font-bold text-sky-200 hover:bg-slate-800">
+          <span>❔ 操作・設定</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Center Toast / Checkpoint Notification -->
+    <div id="toast-banner" class="pointer-events-none absolute top-20 left-1/2 -translate-x-1/2 z-20 transition-all duration-300 opacity-0 -translate-y-3">
+      <div class="glass-pill rounded-2xl px-5 py-2.5 text-center shadow-xl border-2 border-amber-400">
+        <div id="toast-title" class="text-sm sm:text-base font-extrabold text-amber-300">✨ チェックポイント到達！</div>
+        <div id="toast-sub" class="text-xs font-semibold text-slate-200">スペースキー2回で2段ジャンプ、足元撃ちでウインド大ジャンプ！</div>
+      </div>
+    </div>
+
+    <!-- Bottom HUD: Jump & Wind Charges + Speedometer -->
+    <div class="pointer-events-none absolute bottom-3 left-3 right-3 z-20 flex items-end justify-between gap-2">
+      <!-- Left: Movement Status & Charges -->
+      <div class="glass-pill rounded-2xl p-3 flex flex-col gap-2 min-w-[215px] sm:min-w-[255px] pointer-events-auto">
+        <div class="flex items-center justify-between text-xs font-bold">
+          <span class="text-sky-300 flex items-center gap-1">💨 ウインド・ブースト弾</span>
+          <span id="hud-wind-text" class="text-cyan-300">3 / 3 充填完了</span>
+        </div>
+        <div class="grid grid-cols-3 gap-1.5">
+          <div id="wind-pip-1" class="h-2.5 rounded-full bg-gradient-to-r from-cyan-400 to-sky-400 shadow-[0_0_8px_rgba(34,211,238,0.5)] transition-all"></div>
+          <div id="wind-pip-2" class="h-2.5 rounded-full bg-gradient-to-r from-cyan-400 to-sky-400 shadow-[0_0_8px_rgba(34,211,238,0.5)] transition-all"></div>
+          <div id="wind-pip-3" class="h-2.5 rounded-full bg-gradient-to-r from-cyan-400 to-sky-400 shadow-[0_0_8px_rgba(34,211,238,0.5)] transition-all"></div>
+        </div>
+
+        <div class="flex items-center justify-between text-[11px] font-bold text-slate-300 pt-0.5">
+          <div class="flex items-center gap-1.5">
+            <span>👟 状態:</span>
+            <span id="jump-state-badge" class="px-2 py-0.5 rounded-md bg-emerald-500/30 text-emerald-200 border border-emerald-400/40">地上OK</span>
+          </div>
+          <div class="flex items-center gap-1 font-mono text-amber-300">
+            <span id="hud-speed">0.0</span>
+            <span class="text-[10px] text-slate-300">m/s</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Center-Bottom Quick Action Bar -->
+      <div class="flex items-center gap-1.5 sm:gap-2 pointer-events-auto">
+        <button id="btn-action-jump" type="button" class="voxel-btn glass-pill rounded-2xl px-3.5 py-2.5 text-xs sm:text-sm font-extrabold text-emerald-300 active:bg-slate-800 flex items-center gap-1 shadow-md">
+          <span>⬆️ ジャンプ</span>
+          <span class="hidden md:inline text-[10px] font-normal text-slate-300">(Space)</span>
+        </button>
+        <button id="btn-action-wind" type="button" class="voxel-btn glass-pill rounded-2xl px-3.5 py-2.5 text-xs sm:text-sm font-extrabold text-sky-300 active:bg-slate-800 flex items-center gap-1 shadow-md">
+          <span>💨 風ショット</span>
+          <span class="hidden md:inline text-[10px] font-normal text-slate-300">(左Click)</span>
+        </button>
+        <button id="btn-action-grapple" type="button" class="voxel-btn glass-pill rounded-2xl px-3.5 py-2.5 text-xs sm:text-sm font-extrabold text-amber-300 active:bg-slate-800 flex items-center gap-1 shadow-md">
+          <span>✨ 光グラップル</span>
+          <span class="hidden md:inline text-[10px] font-normal text-slate-300">(右Click/E)</span>
+        </button>
+      </div>
+
+      <!-- Right: Mini Height & Course Progress -->
+      <div class="hidden sm:flex glass-pill rounded-2xl p-3 flex-col gap-1.5 min-w-[180px] pointer-events-auto">
+        <div class="flex items-center justify-between text-xs font-bold">
+          <span class="text-slate-300">🌤️ 高度 (Altitude)</span>
+          <span id="hud-altitude" class="font-mono text-amber-300">12m</span>
+        </div>
+        <div class="w-full h-2 bg-slate-700 rounded-full overflow-hidden">
+          <div id="hud-progress-bar" class="h-full bg-gradient-to-r from-emerald-400 via-sky-400 to-amber-400 transition-all duration-300" style="width: 12%"></div>
+        </div>
+        <div class="text-[10px] text-slate-300 font-semibold flex justify-between">
+          <span>START</span>
+          <span id="hud-checkpoint-num">CP 1 / 8</span>
+          <span>SUMMIT</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Mobile / Touch On-Screen D-Pad -->
+    <div id="touch-controls" class="md:hidden absolute bottom-20 left-3 z-20 flex flex-col items-center gap-1 pointer-events-auto opacity-90">
+      <button data-move="forward" type="button" class="w-11 h-11 rounded-xl glass-pill font-bold text-white flex items-center justify-center active:bg-sky-700">▲</button>
+      <div class="flex gap-1">
+        <button data-move="left" type="button" class="w-11 h-11 rounded-xl glass-pill font-bold text-white flex items-center justify-center active:bg-sky-700">◀</button>
+        <button data-move="backward" type="button" class="w-11 h-11 rounded-xl glass-pill font-bold text-white flex items-center justify-center active:bg-sky-700">▼</button>
+        <button data-move="right" type="button" class="w-11 h-11 rounded-xl glass-pill font-bold text-white flex items-center justify-center active:bg-sky-700">▶</button>
+      </div>
+    </div>
+
+    <!-- Island Warp Modal -->
+    <div id="warp-modal" class="hidden absolute inset-0 z-30 bg-slate-950/55 backdrop-blur-sm flex items-center justify-center p-4">
+      <div class="glass-panel rounded-3xl max-w-lg w-full p-5 sm:p-6 shadow-2xl">
+        <div class="flex items-center justify-between pb-3 border-b border-slate-200">
+          <div class="flex items-center gap-2">
+            <span class="text-2xl">🧭</span>
+            <div>
+              <h2 class="text-lg font-extrabold text-slate-800">天空の島ワープ（ステージ選択）</h2>
+              <p class="text-xs text-slate-500">好きなチェックポイント島へいつでもジャンプできます</p>
+            </div>
+          </div>
+          <button id="btn-close-warp" type="button" class="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 font-bold text-slate-600">✕</button>
+        </div>
+        <div id="warp-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-2.5 my-4 max-h-[60vh] overflow-y-auto pr-1"></div>
+        <div class="flex justify-between items-center pt-2 border-t border-slate-200 text-xs text-slate-600">
+          <span>💡 落ちても自動で直前の島にふんわり戻ります</span>
+          <button id="btn-reset-run" type="button" class="voxel-btn px-3 py-1.5 rounded-xl bg-amber-100 hover:bg-amber-200 text-amber-900 font-bold">
+            ⏱️ 最初からタイムアタック
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Welcome / Pause / Settings Modal -->
+    <div id="welcome-modal" class="absolute inset-0 z-30 bg-slate-950/45 backdrop-blur-sm flex items-center justify-center p-4">
+      <div class="glass-panel rounded-3xl max-w-xl w-full p-6 sm:p-7 shadow-2xl border-2 border-white">
+        <div class="flex items-center justify-between gap-2 mb-3">
+          <span class="px-3 py-1 rounded-full text-xs font-extrabold bg-gradient-to-r from-sky-600 to-emerald-600 text-white shadow-sm">
+            ✨ HIGH-CONTRAST VOXEL PARKOUR FPS
+          </span>
+          <span class="text-xs font-bold text-slate-700">6面法線シェーディング＆エッジ輪郭線</span>
+        </div>
+
+        <h1 class="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight mb-1">
+          SKYBLOOM VOXEL <span class="text-sky-700 text-lg sm:text-xl font-bold">— 天空の風パルクール —</span>
+        </h1>
+        <p class="text-xs sm:text-sm text-slate-700 mb-4 leading-relaxed">
+          晴れやかな青空のもと、<strong>面ごとの明暗コントラスト（天面ハイライト・陽だまり面・寒色シェード面・底面ディープシャドウ）</strong>と<strong>ボクセル輪郭線</strong>で立体形状がくっきり見えるパルクールFPSです。
+        </p>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mb-5 text-xs">
+          <div class="bg-slate-50 rounded-2xl p-3 border border-slate-200">
+            <div class="font-extrabold text-sky-900 mb-1.5">🏃‍♂️ 移動＆ジャンプアクション</div>
+            <ul class="space-y-1 text-slate-700">
+              <li><strong class="text-slate-900">W A S D / 矢印</strong> : 移動（空中制御つき）</li>
+              <li><strong class="text-slate-900">Space</strong> : ジャンプ / <strong>空中2段ジャンプ</strong></li>
+              <li><strong class="text-slate-900">壁に向かってSpace</strong> : <strong>壁キックジャンプ！</strong></li>
+              <li><strong class="text-slate-900">Shift</strong> : 風スプリント（スピードUP）</li>
+            </ul>
+          </div>
+          <div class="bg-slate-50 rounded-2xl p-3 border border-slate-200">
+            <div class="font-extrabold text-amber-900 mb-1.5">💨 風ランチャー＆光グラップル</div>
+            <ul class="space-y-1 text-slate-700">
+              <li><strong class="text-slate-900">左クリック</strong> : <strong>ウインドショット</strong>（逆方向へ空中推進＋足元撃ちで<strong>大ロケットジャンプ</strong>！）</li>
+              <li><strong class="text-slate-900">右クリック / Eキー</strong> : <strong>光グラップル</strong>（ブロックや浮遊オーブへワイヤー移動）</li>
+              <li><strong class="text-slate-900">マウス移動 / ドラッグ</strong> : 視点操作</li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- Graphics & Lighting Settings -->
+        <div class="bg-slate-100 rounded-2xl p-3.5 mb-5 border border-slate-300 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div class="flex items-center gap-2">
+            <span class="font-extrabold text-slate-900">🎨 視覚明瞭度設定:</span>
+            <label class="inline-flex items-center gap-1 cursor-pointer">
+              <input id="chk-shadows" type="checkbox" checked class="rounded text-sky-600" />
+              <span class="font-semibold text-slate-800">太陽光ドロップシャドウ</span>
+            </label>
+            <label class="inline-flex items-center gap-1 cursor-pointer ml-2">
+              <input id="chk-particles" type="checkbox" checked class="rounded text-sky-600" />
+              <span class="font-semibold text-slate-800">空間パーティクル</span>
+            </label>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <span class="font-semibold text-slate-700">視点感度:</span>
+            <input id="slider-sens" type="range" min="0.4" max="2.2" step="0.1" value="1.0" class="w-20 accent-sky-600" />
+          </div>
+        </div>
+
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <button id="btn-start-play" type="button" class="voxel-btn flex-1 py-3 px-6 rounded-2xl bg-gradient-to-r from-sky-600 via-cyan-600 to-emerald-500 text-white font-extrabold text-base shadow-lg text-center">
+            🌈 青空のパルクールへ出発する！
+          </button>
+          <button id="btn-start-freefly" type="button" class="voxel-btn py-3 px-4 rounded-2xl bg-slate-100 hover:bg-emerald-50 text-emerald-800 border border-emerald-300 font-bold text-xs sm:text-sm">
+            🕊️ 空中散歩モードで始める
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Summit Clear Celebration Modal -->
+    <div id="clear-modal" class="hidden absolute inset-0 z-30 bg-slate-950/55 backdrop-blur-sm flex items-center justify-center p-4">
+      <div class="glass-panel rounded-3xl max-w-md w-full p-6 text-center shadow-2xl border-2 border-amber-400">
+        <div class="text-5xl mb-2 animate-bounce">🏆</div>
+        <h2 class="text-2xl font-extrabold text-slate-900 mb-1">SUMMIT REACHED!</h2>
+        <p class="text-xs sm:text-sm text-slate-600 mb-4">天空のサンクチュアリへ到達しました！美しい青空の旅をお見事です！</p>
+
+        <div class="grid grid-cols-3 gap-2 bg-slate-50 rounded-2xl p-3.5 mb-5 border border-slate-200">
+          <div>
+            <div class="text-[10px] font-bold text-slate-500">CLEAR TIME</div>
+            <div id="clear-time" class="text-base font-extrabold text-sky-700 font-mono">01:24.5</div>
+          </div>
+          <div>
+            <div class="text-[10px] font-bold text-slate-500">STAR PRISMS</div>
+            <div id="clear-stars" class="text-base font-extrabold text-amber-600">12 / 15</div>
+          </div>
+          <div>
+            <div class="text-[10px] font-bold text-slate-500">WIND BELLS</div>
+            <div id="clear-bells" class="text-base font-extrabold text-pink-600">5 / 5</div>
+          </div>
+        </div>
+
+        <div class="flex gap-2.5">
+          <button id="btn-clear-continue" type="button" class="voxel-btn flex-1 py-2.5 px-4 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold text-sm">
+            🕊️ 探索を続ける
+          </button>
+          <button id="btn-clear-replay" type="button" class="voxel-btn flex-1 py-2.5 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white font-extrabold text-sm shadow-md">
+            🔄 もう一度タイムアタック
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // =========================================================================
+    // 1. SYNTHESIZED PEACEFUL WEB AUDIO ENGINE
+    // =========================================================================
+    const SoundFX = (() => {
+      let ctx = null;
+      let muted = false;
+
+      function ensureCtx() {
+        if (muted) return null;
+        if (!ctx) {
+          const AudioCtx = window.AudioContext || window.webkitAudioContext;
+          if (AudioCtx) ctx = new AudioCtx();
+        }
+        if (ctx && ctx.state === 'suspended') {
+          ctx.resume().catch(() => {});
+        }
+        return ctx;
+      }
+
+      function playTone(freq, type, duration, gainVal = 0.12, slideTo = null, delay = 0) {
+        const c = ensureCtx();
+        if (!c) return;
+        const now = c.currentTime + delay;
+        const osc = c.createOscillator();
+        const gain = c.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, now);
+        if (slideTo) {
+          osc.frequency.exponentialRampToValueAtTime(slideTo, now + duration);
+        }
+        gain.gain.setValueAtTime(0.001, now);
+        gain.gain.linearRampToValueAtTime(gainVal, now + 0.015);
+        gain.gain.exponentialRampToValueAtTime(0.0008, now + duration);
+        osc.connect(gain);
+        gain.connect(c.destination);
+        osc.start(now);
+        osc.stop(now + duration + 0.02);
+      }
+
+      return {
+        toggleMute() { muted = !muted; return muted; },
+        isMuted() { return muted; },
+        jump(isDouble = false) {
+          if (!isDouble) playTone(330, 'sine', 0.16, 0.12, 520);
+          else {
+            playTone(440, 'triangle', 0.18, 0.13, 740);
+            playTone(660, 'sine', 0.22, 0.09, 980, 0.04);
+          }
+        },
+        wallJump() {
+          playTone(392, 'triangle', 0.14, 0.12, 659);
+          playTone(587, 'sine', 0.18, 0.10, 880, 0.03);
+        },
+        windShot(isRocketJump = false) {
+          playTone(260, 'sine', 0.22, 0.13, 680);
+          if (isRocketJump) playTone(523.25, 'triangle', 0.30, 0.14, 1046.5, 0.03);
+        },
+        bouncePad() {
+          [392, 523.25, 659.25, 783.99].forEach((n, i) => playTone(n, 'sine', 0.26, 0.11, n * 1.15, i * 0.045));
+        },
+        starCollect() {
+          [587.33, 783.99, 987.77, 1174.66].forEach((n, i) => playTone(n, 'triangle', 0.32, 0.11, null, i * 0.055));
+        },
+        bellHit() {
+          [659.25, 880, 1318.5, 1760].forEach((n, i) => playTone(n, 'sine', 0.55, 0.10, null, i * 0.06));
+        },
+        checkpoint() {
+          [523.25, 659.25, 783.99, 1046.5].forEach((n, i) => playTone(n, 'triangle', 0.38, 0.11, null, i * 0.07));
+        },
+        grapple() {
+          playTone(480, 'sine', 0.15, 0.10, 880);
+        }
+      };
+    })();
+
+    // =========================================================================
+    // 2. PERCEPTUALLY CALIBRATED 6-FACE DIRECTIONAL VOXEL MATERIALS & EDGES
+    // =========================================================================
+    // Human visual shape perception relies on distinct luminance steps across orthogonal
+    // faces (+Y top, +X/+Z sunlit sides, -X/-Z cool shaded sides, -Y deep underside)
+    // plus crisp boundary contours so same-colored blocks never merge into flat blobs.
+
+    function shadeHex(hexStr, mulR, mulG = mulR, mulB = mulR) {
+      const c = new THREE.Color(hexStr);
+      c.r = Math.min(1, Math.max(0, c.r * mulR));
+      c.g = Math.min(1, Math.max(0, c.g * mulG));
+      c.b = Math.min(1, Math.max(0, c.b * mulB));
+      return c;
+    }
+
+    function createVoxelTexture(drawFn) {
+      const c = document.createElement('canvas');
+      c.width = 16;
+      c.height = 16;
+      const ctx = c.getContext('2d');
+      drawFn(ctx, 16, 16);
+      const tex = new THREE.CanvasTexture(c);
+      tex.magFilter = THREE.NearestFilter;
+      tex.minFilter = THREE.NearestFilter;
+      tex.needsUpdate = true;
+      return tex;
+    }
+
+    // Build a 6-face material array [+X, -X, +Y(top), -Y(bottom), +Z, -Z]
+    // with explicit luminance ratios (Top: 1.0, +X: 0.80, +Z: 0.68, -Z: 0.56, -X: 0.46, -Y: 0.30)
+    // and warm-sun / cool-shadow chromatic shift so every corner edge pops!
+    function makeShadedBoxMaterials(topHex, sideHex, bottomHex, texMap = null) {
+      const sHex = sideHex || topHex;
+      const bHex = bottomHex || sHex;
+      return [
+        // 0: +X (East side - 84% warm medium-bright)
+        new THREE.MeshLambertMaterial({ color: shadeHex(sHex, 0.86, 0.84, 0.80), map: texMap }),
+        // 1: -X (West side - 72% cool sky-tinted shade, never dark grey!)
+        new THREE.MeshLambertMaterial({ color: shadeHex(sHex, 0.68, 0.74, 0.86), map: texMap }),
+        // 2: +Y (Top face - 100% crisp sunlit surface)
+        new THREE.MeshLambertMaterial({ color: shadeHex(topHex, 1.0, 1.0, 1.0), map: texMap }),
+        // 3: -Y (Bottom underside - 55% clear underside shade)
+        new THREE.MeshLambertMaterial({ color: shadeHex(bHex, 0.52, 0.56, 0.68) }),
+        // 4: +Z (South front face - 92% bright welcoming front face)
+        new THREE.MeshLambertMaterial({ color: shadeHex(sHex, 0.94, 0.93, 0.90), map: texMap }),
+        // 5: -Z (North back face - 78% soft cool shade)
+        new THREE.MeshLambertMaterial({ color: shadeHex(sHex, 0.76, 0.80, 0.90), map: texMap })
+      ];
+    }
+
+    // Crisp Subtle Voxel Grid Texture (adds micro-detail without bleaching)
+    const subtleGridTex = createVoxelTexture((ctx) => {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, 16, 16);
+      ctx.fillStyle = '#e2e8f0';
+      for (let y = 0; y < 16; y += 4) {
+        for (let x = 0; x < 16; x += 4) {
+          if ((x + y) % 8 === 0) ctx.fillRect(x, y, 2, 2);
+        }
+      }
+      // Subtle dark voxel border inside the 16x16 tile for tactile block definition
+      ctx.strokeStyle = 'rgba(15, 23, 42, 0.22)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(0.5, 0.5, 15, 15);
+    });
+
+    const VoxelPalettes = {
+      // Bright spring meadow top + vibrant emerald side rim
+      grassCap: makeShadedBoxMaterials('#4ade80', '#22c55e', '#16a34a', subtleGridTex),
+      // Sunny golden-terracotta island base
+      earthBody: makeShadedBoxMaterials('#f59e0b', '#d97706', '#b45309', subtleGridTex),
+      // Warm cream-limestone blocks with sky-slate side contrast
+      stone: makeShadedBoxMaterials('#f8fafc', '#cbd5e1', '#94a3b8', subtleGridTex),
+      // Distinct stone trim / pathway tile for floor depth cues
+      stoneTrim: makeShadedBoxMaterials('#e2e8f0', '#94a3b8', '#64748b', subtleGridTex),
+      // Bright, cheerful sakura pink blossoms (high chroma, never muddy)
+      sakura: makeShadedBoxMaterials('#fce7f3', '#f9a8d4', '#ec4899', subtleGridTex),
+      // Fresh emerald-mint tree foliage
+      foliage: makeShadedBoxMaterials('#6ee7b7', '#34d399', '#10b981', subtleGridTex),
+      // Warm amber-cinnamon wood trunk
+      wood: makeShadedBoxMaterials('#eab308', '#d97706', '#9a3412', subtleGridTex),
+      // Fluffy white cloud top with crisp airy sky-blue sides and underside
+      cloud: makeShadedBoxMaterials('#ffffff', '#f0f9ff', '#93c5fd', subtleGridTex),
+      // Radiant golden bounce pad
+      bounce: makeShadedBoxMaterials('#fef08a', '#f59e0b', '#d97706', subtleGridTex)
+    };
+
+    const waterMat = new THREE.MeshStandardMaterial({
+      color: '#0284c7',
+      emissive: '#0369a1',
+      emissiveIntensity: 0.25,
+      transparent: true,
+      opacity: 0.80,
+      roughness: 0.15
+    });
+
+    const rainbowPaletteHex = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#6366f1', '#ec4899'];
+
+    // Edge Outline Materials for unmistakable 3D shape boundaries
+    const allEdgeLines = [];
+    const darkEdgeMat = new THREE.LineBasicMaterial({
+      color: '#0f172a',
+      transparent: true,
+      opacity: 0.58
+    });
+    const cloudEdgeMat = new THREE.LineBasicMaterial({
+      color: '#1e3a8a',
+      transparent: true,
+      opacity: 0.50
+    });
+
+    function attachEdgeOutline(mesh, geo, isCloud = false) {
+      const edgesGeo = new THREE.EdgesGeometry(geo);
+      const line = new THREE.LineSegments(edgesGeo, isCloud ? cloudEdgeMat : darkEdgeMat);
+      mesh.add(line);
+      allEdgeLines.push(line);
+    }
+
+    // =========================================================================
+    // 3. THREE.JS SCENE, CALIBRATED LIGHTING & DEEP SKY ATMOSPHERE
+    // =========================================================================
+    const canvas = document.getElementById('webgl-canvas');
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    // Calibrated exposure (< 1.0) so bright colors NEVER clip to pure white (#FFFFFF)
+    renderer.toneMappingExposure = 0.98;
+
+    const scene = new THREE.Scene();
+    // Cheerful, clear sky blue that contrasts with both bright white clouds and lush green islands
+    scene.background = new THREE.Color('#38bdf8');
+    scene.fog = new THREE.FogExp2('#7dd3fc', 0.0014);
+
+    const camera = new THREE.PerspectiveCamera(78, window.innerWidth / window.innerHeight, 0.1, 600);
+    const playerRig = new THREE.Group();
+    scene.add(playerRig);
+    playerRig.add(camera);
+
+    // Calibrated Lighting: Hemi (0.56) + Directional Sun (0.56) at asymmetric angle (135, 165, 45)
+    // Top face gets ~1.00 irradiance (bright & true to color, zero clipping),
+    // +X gets ~0.88, +Z gets ~0.64, -Z gets ~0.50, -X gets ~0.44, -Y gets ~0.35!
+    const hemiLight = new THREE.HemisphereLight('#ffffff', '#e2e8f0', 0.68);
+    hemiLight.position.set(0, 120, 0);
+    scene.add(hemiLight);
+
+    // Primary Sun positioned in South-East (+X, +Y, +Z) so front (+Z) and right (+X) faces are sunlit
+    const sunLight = new THREE.DirectionalLight('#fffbeb', 0.36);
+    sunLight.position.set(95, 160, 135);
+
+    // Opposite Fill Light in North-West (-X, +Y, -Z) so walls are NEVER in dark backlight!
+    const fillLight = new THREE.DirectionalLight('#e0f2fe', 0.22);
+    fillLight.position.set(-110, 110, -110);
+    scene.add(fillLight);
+    sunLight.castShadow = true;
+    sunLight.shadow.mapSize.width = 2048;
+    sunLight.shadow.mapSize.height = 2048;
+    sunLight.shadow.camera.near = 10;
+    sunLight.shadow.camera.far = 420;
+    const d = 140;
+    sunLight.shadow.camera.left = -d;
+    sunLight.shadow.camera.right = d;
+    sunLight.shadow.camera.top = d;
+    sunLight.shadow.camera.bottom = -d;
+    sunLight.shadow.bias = -0.0005;
+    scene.add(sunLight);
+
+    // Sun Disc in Sky
+    const sunGroup = new THREE.Group();
+    const sunMesh = new THREE.Mesh(
+      new THREE.SphereGeometry(12, 20, 20),
+      new THREE.MeshBasicMaterial({ color: '#fde047' })
+    );
+    sunGroup.add(sunMesh);
+    sunGroup.position.copy(sunLight.position).multiplyScalar(1.6);
+    scene.add(sunGroup);
+
+    // Weather / Time-of-Day Presets (all calibrated for high contrast)
+    const WeatherPresets = [
+      {
+        name: '晴天モーニング',
+        icon: '☀️',
+        bg: '#38bdf8',
+        fog: '#7dd3fc',
+        hemiSky: '#f0f9ff',
+        hemiGround: '#cbd5e1',
+        sunColor: '#fffbeb',
+        sunIntensity: 0.56,
+        sunPos: [135, 165, 45]
+      },
+      {
+        name: '茜色サンセット',
+        icon: '🌅',
+        bg: '#c2410c',
+        fog: '#ea580c',
+        hemiSky: '#fed7aa',
+        hemiGround: '#431407',
+        sunColor: '#fde047',
+        sunIntensity: 0.52,
+        sunPos: [140, 75, -90]
+      },
+      {
+        name: '蒼穹エメラルド',
+        icon: '🌿',
+        bg: '#0369a1',
+        fog: '#0284c7',
+        hemiSky: '#bae6fd',
+        hemiGround: '#334155',
+        sunColor: '#fef9c3',
+        sunIntensity: 0.48,
+        sunPos: [-90, 150, 110]
+      }
+    ];
+    let currentWeatherIdx = 0;
+
+    function applyWeather(idx) {
+      currentWeatherIdx = idx % WeatherPresets.length;
+      const p = WeatherPresets[currentWeatherIdx];
+      scene.background.set(p.bg);
+      scene.fog.color.set(p.fog);
+      hemiLight.color.set(p.hemiSky);
+      hemiLight.groundColor.set(p.hemiGround);
+      sunLight.color.set(p.sunColor);
+      sunLight.intensity = p.sunIntensity;
+      sunLight.position.set(p.sunPos[0], p.sunPos[1], p.sunPos[2]);
+      sunGroup.position.copy(sunLight.position).multiplyScalar(1.6);
+      document.getElementById('weather-icon').textContent = p.icon;
+      document.getElementById('weather-label').textContent = p.name;
+    }
+
+    // =========================================================================
+    // 4. HIGH-CONTRAST FIRST-PERSON VOXEL VIEWMODEL ("Zephyr Wind Caster")
+    // =========================================================================
+    const viewmodelGroup = new THREE.Group();
+    camera.add(viewmodelGroup);
+    viewmodelGroup.position.set(0.42, -0.36, -0.62);
+
+    function buildVoxelLauncher() {
+      const gun = new THREE.Group();
+      // Deep cobalt-slate body so the viewmodel stands out crisply against bright sky & clouds
+      const bodyMats = makeShadedBoxMaterials('#e2e8f0', '#94a3b8', '#475569');
+      const cyanMats = makeShadedBoxMaterials('#22d3ee', '#0891b2', '#164e63');
+      const goldMats = makeShadedBoxMaterials('#f59e0b', '#d97706', '#78350f');
+      const gripMats = makeShadedBoxMaterials('#475569', '#334155', '#0f172a');
+
+      const barrelGeo = new THREE.BoxGeometry(0.13, 0.13, 0.44);
+      const barrel = new THREE.Mesh(barrelGeo, bodyMats);
+      attachEdgeOutline(barrel, barrelGeo);
+
+      const railGeo = new THREE.BoxGeometry(0.07, 0.045, 0.34);
+      const topRail = new THREE.Mesh(railGeo, goldMats);
+      topRail.position.set(0, 0.085, -0.02);
+      attachEdgeOutline(topRail, railGeo);
+
+      const coreGeo = new THREE.BoxGeometry(0.09, 0.09, 0.09);
+      const coreCrystal = new THREE.Mesh(coreGeo, cyanMats);
+      coreCrystal.position.set(0, 0.02, -0.25);
+      attachEdgeOutline(coreCrystal, coreGeo);
+
+      const ringGeo = new THREE.BoxGeometry(0.16, 0.16, 0.045);
+      const nozzleRing = new THREE.Mesh(ringGeo, cyanMats);
+      nozzleRing.position.set(0, 0, -0.20);
+      attachEdgeOutline(nozzleRing, ringGeo);
+
+      const handleGeo = new THREE.BoxGeometry(0.09, 0.16, 0.09);
+      const handle = new THREE.Mesh(handleGeo, gripMats);
+      handle.position.set(0, -0.12, 0.10);
+      handle.rotation.x = 0.25;
+
+      gun.add(barrel, topRail, coreCrystal, nozzleRing, handle);
+      return { gun, coreCrystal, nozzleRing };
+    }
+    const launcherVM = buildVoxelLauncher();
+    viewmodelGroup.add(launcherVM.gun);
+
+    const grappleLineMat = new THREE.LineBasicMaterial({ color: '#facc15', linewidth: 3 });
+    const grappleLineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+    const grappleLine = new THREE.Line(grappleLineGeo, grappleLineMat);
+    grappleLine.visible = false;
+    scene.add(grappleLine);
+
+    // =========================================================================
+    // 5. VOXEL WORLD BUILDER WITH LAYERED SILHOUETTES & EDGE CONTOURS
+    // =========================================================================
+    const colliders = [];
+    const movingPlatforms = [];
+    const bouncePads = [];
+    const updraftZones = [];
+    const starCollectibles = [];
+    const windBells = [];
+    const skyRings = [];
+    const grapplePoints = [];
+
+    function addVoxelBoxMesh(x, y, z, w, h, d, mats, hasEdge = true, isCloud = false, castShad = true) {
+      const geo = new THREE.BoxGeometry(w, h, d);
+      const mesh = new THREE.Mesh(geo, mats);
+      mesh.position.set(x, y, z);
+      mesh.castShadow = castShad;
+      mesh.receiveShadow = true;
+      if (hasEdge) attachEdgeOutline(mesh, geo, isCloud);
+      scene.add(mesh);
+      return mesh;
+    }
+
+    function addPlatform(x, y, z, w, h, d, style = 'grass', isSolid = true) {
+      let primaryMesh = null;
+
+      if (style === 'grass' && h >= 1.8) {
+        // Two-layer voxel island construction:
+        // 1) Lush emerald top turf cap (overhanging slightly)
+        // 2) Rich warm terracotta earth cliff body underneath
+        const capH = Math.min(1.1, h * 0.32);
+        const bodyH = h - capH;
+        const capY = y + h / 2 - capH / 2;
+        const bodyY = y - capH / 2;
+
+        primaryMesh = addVoxelBoxMesh(x, capY, z, w, capH, d, VoxelPalettes.grassCap, true, false, true);
+        addVoxelBoxMesh(x, bodyY, z, Math.max(1, w - 0.6), bodyH, Math.max(1, d - 0.6), VoxelPalettes.earthBody, true, false, true);
+        // Add subtle stepping pathway tiles on large grass islands for floor depth perception
+        if (w >= 14 && d >= 14) {
+          for (let tz = -d / 2 + 3; tz <= d / 2 - 3; tz += 4.5) {
+            addVoxelBoxMesh(x, y + h / 2 + 0.06, z + tz, 2.6, 0.12, 2.6, VoxelPalettes.stoneTrim, true, false, false);
+          }
+        }
+      } else {
+        let mats = VoxelPalettes.grassCap;
+        let isCloud = false;
+        if (style === 'stone') {
+          mats = VoxelPalettes.stone;
+          if (w >= 14 && d >= 14) {
+            for (let tz = -d / 2 + 3; tz <= d / 2 - 3; tz += 4.5) {
+              addVoxelBoxMesh(x, y + h / 2 + 0.06, z + tz, 3.0, 0.12, 3.0, VoxelPalettes.stoneTrim, true, false, false);
+            }
+          }
+        }
+        else if (style === 'cloud') { mats = VoxelPalettes.cloud; isCloud = true; }
+        else if (style === 'sakura') mats = VoxelPalettes.sakura;
+        else if (style === 'foliage') mats = VoxelPalettes.foliage;
+        else if (style === 'wood') mats = VoxelPalettes.wood;
+        else if (style === 'water') mats = waterMat;
+
+        primaryMesh = addVoxelBoxMesh(x, y, z, w, h, d, mats, style !== 'water', isCloud, style !== 'water');
+      }
+
+      let colObj = null;
+      if (isSolid) {
+        const box = new THREE.Box3().setFromCenterAndSize(
+          new THREE.Vector3(x, y, z),
+          new THREE.Vector3(w, h, d)
+        );
+        colObj = { box, style, mesh: primaryMesh, size: new THREE.Vector3(w, h, d) };
+        colliders.push(colObj);
+      }
+      return { mesh: primaryMesh, colObj };
+    }
+
+    function addVoxelTree(x, surfaceY, z, type = 'sakura') {
+      const trunkH = 4.5;
+      addPlatform(x, surfaceY + trunkH / 2, z, 1.2, trunkH, 1.2, 'wood', true);
+      const leafStyle = type === 'sakura' ? 'sakura' : 'foliage';
+      addPlatform(x, surfaceY + trunkH + 1.2, z, 4.6, 2.2, 4.6, leafStyle, true);
+      addPlatform(x, surfaceY + trunkH + 2.9, z, 3.0, 1.5, 3.0, leafStyle, true);
+    }
+
+    function addBouncePad(x, surfaceY, z, power = 23) {
+      const mesh = addVoxelBoxMesh(x, surfaceY + 0.4, z, 3.2, 0.8, 3.2, VoxelPalettes.bounce, true, false, true);
+      const box = new THREE.Box3().setFromCenterAndSize(
+        new THREE.Vector3(x, surfaceY + 0.55, z),
+        new THREE.Vector3(3.4, 1.2, 3.4)
+      );
+      bouncePads.push({ box, mesh, power, baseY: surfaceY + 0.4 });
+    }
+
+    function buildHollowVoxelSquareFrame(size, thickness, mats) {
+      const frame = new THREE.Group();
+      const bars = [
+        { w: size, h: thickness, d: thickness, px: 0, py: size / 2, pz: 0 },
+        { w: size, h: thickness, d: thickness, px: 0, py: -size / 2, pz: 0 },
+        { w: thickness, h: size - thickness * 2, d: thickness, px: -size / 2 + thickness / 2, py: 0, pz: 0 },
+        { w: thickness, h: size - thickness * 2, d: thickness, px: size / 2 - thickness / 2, py: 0, pz: 0 }
+      ];
+      bars.forEach((b) => {
+        const g = new THREE.BoxGeometry(b.w, b.h, b.d);
+        const m = new THREE.Mesh(g, mats);
+        m.position.set(b.px, b.py, b.pz);
+        attachEdgeOutline(m, g);
+        frame.add(m);
+      });
+      return frame;
+    }
+
+    function addUpdraftGeyser(x, bottomY, z, height = 22) {
+      const group = new THREE.Group();
+      const windMats = makeShadedBoxMaterials('#e0f2fe', '#38bdf8', '#0284c7');
+      const rings = [];
+      // 4 horizontal 3D voxel square rings (built from solid voxel bars, zero wireframe!)
+      for (let i = 0; i < 4; i++) {
+        const ringGroup = new THREE.Group();
+        const s = 3.4;
+        const t = 0.24;
+        const horizBars = [
+          { w: s, h: t, d: t, px: 0, pz: s / 2 },
+          { w: s, h: t, d: t, px: 0, pz: -s / 2 },
+          { w: t, h: t, d: s - t * 2, px: -s / 2 + t / 2, pz: 0 },
+          { w: t, h: t, d: s - t * 2, px: s / 2 - t / 2, pz: 0 }
+        ];
+        horizBars.forEach((b) => {
+          const g = new THREE.BoxGeometry(b.w, b.h, b.d);
+          const m = new THREE.Mesh(g, windMats);
+          m.position.set(b.px, 0, b.pz);
+          attachEdgeOutline(m, g, true);
+          ringGroup.add(m);
+        });
+        ringGroup.position.y = (i - 1.5) * (height / 4);
+        group.add(ringGroup);
+        rings.push(ringGroup);
+      }
+      group.position.set(x, bottomY + height / 2, z);
+      scene.add(group);
+
+      const box = new THREE.Box3().setFromCenterAndSize(
+        new THREE.Vector3(x, bottomY + height / 2, z),
+        new THREE.Vector3(4.2, height, 4.2)
+      );
+      updraftZones.push({ box, mesh: group, rings, height });
+    }
+
+    function addMovingCloud(x, y, z, w, h, d, axis, amp, speed, phase = 0) {
+      const { mesh, colObj } = addPlatform(x, y, z, w, h, d, 'cloud', true);
+      movingPlatforms.push({
+        mesh,
+        collider: colObj,
+        basePos: new THREE.Vector3(x, y, z),
+        axis,
+        amp,
+        speed,
+        phase,
+        lastDelta: new THREE.Vector3()
+      });
+    }
+
+    function addStarPrism(x, y, z) {
+      const group = new THREE.Group();
+      const starMats = makeShadedBoxMaterials('#fde047', '#f59e0b', '#b45309');
+      const coreGeo = new THREE.BoxGeometry(0.95, 0.95, 0.95);
+      const core = new THREE.Mesh(coreGeo, starMats);
+      core.rotation.x = Math.PI / 4; core.rotation.y = Math.PI / 4;
+      attachEdgeOutline(core, coreGeo);
+      group.add(core);
+      group.position.set(x, y, z);
+      scene.add(group);
+      starCollectibles.push({
+        mesh: group,
+        pos: new THREE.Vector3(x, y, z),
+        collected: false,
+        id: starCollectibles.length + 1
+      });
+    }
+
+    function addGrappleOrb(x, y, z) {
+      const group = new THREE.Group();
+      const orbMats = makeShadedBoxMaterials('#38bdf8', '#0284c7', '#1e3a8a');
+      const goldRimMats = makeShadedBoxMaterials('#fde047', '#f59e0b', '#b45309');
+      const coreGeo = new THREE.BoxGeometry(1.15, 1.15, 1.15);
+      const core = new THREE.Mesh(coreGeo, orbMats);
+      attachEdgeOutline(core, coreGeo);
+      // Solid 3D Voxel Golden Ring Frame around the Grapple Core (zero wireframe!)
+      const haloFrame = buildHollowVoxelSquareFrame(2.2, 0.24, goldRimMats);
+      group.add(core, haloFrame);
+      group.position.set(x, y, z);
+      scene.add(group);
+      grapplePoints.push({ mesh: group, haloFrame, pos: new THREE.Vector3(x, y, z) });
+    }
+
+    function addSkyRing(x, y, z, rotY = 0) {
+      const group = new THREE.Group();
+      const ringMats = makeShadedBoxMaterials('#22d3ee', '#0891b2', '#155e75');
+      const size = 5.0;
+      const t = 0.5;
+      const parts = [
+        { w: size, h: t, d: t, px: 0, py: size / 2 },
+        { w: size, h: t, d: t, px: 0, py: -size / 2 },
+        { w: t, h: size, d: t, px: -size / 2, py: 0 },
+        { w: t, h: size, d: t, px: size / 2, py: 0 }
+      ];
+      parts.forEach((p) => {
+        const g = new THREE.BoxGeometry(p.w, p.h, p.d);
+        const m = new THREE.Mesh(g, ringMats);
+        m.position.set(p.px, p.py, 0);
+        attachEdgeOutline(m, g);
+        group.add(m);
+      });
+      group.position.set(x, y, z);
+      group.rotation.y = rotY;
+      scene.add(group);
+      skyRings.push({ mesh: group, pos: new THREE.Vector3(x, y, z), radius: 3.4 });
+    }
+
+    function addWindBellTarget(x, y, z, onHitCallback) {
+      const group = new THREE.Group();
+      const bellMats = makeShadedBoxMaterials('#f472b6', '#db2777', '#831843');
+      const domeGeo = new THREE.BoxGeometry(1.7, 1.7, 1.7);
+      const dome = new THREE.Mesh(domeGeo, bellMats);
+      attachEdgeOutline(dome, domeGeo);
+
+      const stripGeo = new THREE.BoxGeometry(0.45, 2.0, 0.15);
+      const strip = new THREE.Mesh(stripGeo, makeShadedBoxMaterials('#fde047', '#ca8a04', '#713f12'));
+      strip.position.y = -1.7;
+      attachEdgeOutline(strip, stripGeo);
+
+      group.add(dome, strip);
+      group.position.set(x, y, z);
+      scene.add(group);
+
+      windBells.push({
+        mesh: group,
+        dome,
+        pos: new THREE.Vector3(x, y, z),
+        triggered: false,
+        id: windBells.length + 1,
+        onHit: onHitCallback
+      });
+    }
+
+    // =========================================================================
+    // 6. DESIGN THE 8 SKY ISLAND CHECKPOINTS & PARKOUR COURSE
+    // =========================================================================
+    const Checkpoints = [
+      { id: 1, name: '1. はじまりの草原島', desc: '基本ジャンプとトランポリン', spawn: new THREE.Vector3(0, 5, 4), yaw: 0 },
+      { id: 2, name: '2. ふわふわ雲の階段', desc: '動く雲と2段ジャンプ＆風ショット', spawn: new THREE.Vector3(0, 11, -34), yaw: 0 },
+      { id: 3, name: '3. 風鈴と虹の架け橋', desc: '前方の風鈴ターゲットを撃って虹の橋を出現させよう', spawn: new THREE.Vector3(0, 18, -76), yaw: 0 },
+      { id: 4, name: '4. 桜並木のウォール渓谷', desc: '壁に向かってジャンプして壁キック！', spawn: new THREE.Vector3(28, 25, -118), yaw: -Math.PI / 2 },
+      { id: 5, name: '5. クリスタル大滝と上昇気流', desc: '気流と光グラップルで一気に高度アップ', spawn: new THREE.Vector3(68, 30, -114), yaw: 0 },
+      { id: 6, name: '6. プリズム空中リング回廊', desc: '水色の空中リングを通ると風ブーストが全回復！', spawn: new THREE.Vector3(68, 50, -165), yaw: Math.PI / 2 },
+      { id: 7, name: '7. 星見の古代ボクセル神殿', desc: '足元風ロケットジャンプで高台へ', spawn: new THREE.Vector3(12, 60, -195), yaw: Math.PI / 2 },
+      { id: 8, name: '8. 天空のサンクチュアリ(頂上)', desc: '祝福のゴール島！すべての星を集めよう', spawn: new THREE.Vector3(-42, 76, -195), yaw: Math.PI / 2 }
+    ];
+
+    function buildCourseWorld() {
+      // --- ISLAND 1: Meadow Haven ---
+      addPlatform(0, 0, 0, 22, 4, 22, 'grass');
+      addPlatform(-7, 2.6, -5, 5, 1.2, 5, 'stone');
+      addVoxelTree(-7, 3.2, -5, 'sakura');
+      addVoxelTree(7, 2.0, 5, 'foliage');
+      // Pond & Waterfall on right edge of Island 1
+      addPlatform(6.5, 1.6, -5, 5, 1.0, 5, 'water', false);
+      addPlatform(6.5, -5.0, -9.8, 3.5, 13, 1.0, 'water', false);
+      addStarPrism(-7, 10.5, -5);
+      addStarPrism(4.5, 5.2, -8);
+      addBouncePad(0, 2.0, -9.0, 22);
+
+      // Stepping stone to Island 2
+      addPlatform(0, 5.5, -21, 6.5, 2.4, 6.5, 'grass');
+      addStarPrism(0, 9.2, -21);
+
+      // --- ISLAND 2: Stepping Clouds ---
+      addPlatform(0, 7.5, -36, 16, 3.5, 16, 'grass');
+      addVoxelTree(5, 9.2, -39, 'sakura');
+      addMovingCloud(0, 10.5, -51, 6, 1.8, 6, 'x', 6.5, 1.6, 0);
+      addMovingCloud(0, 13.5, -64, 6, 1.8, 6, 'y', 3.2, 1.8, 1.2);
+      addStarPrism(0, 14.5, -51);
+      addStarPrism(0, 18.5, -64);
+
+      addWindBellTarget(-7.5, 14.5, -42, () => {
+        showToast('🎐 風鈴 #1 が鳴り響いた！', '高台にボーナス星のかけらが出現！');
+        addStarPrism(0, 13.5, -36);
+      });
+
+      // --- ISLAND 3: Windmill & Rainbow Bridge Arch ---
+      // Placed so spawning at z=-76 frames the stone arch at z=-85 clearly in front!
+      addPlatform(0, 15, -82, 18, 4, 18, 'stone');
+      addPlatform(-5.5, 19.5, -86, 2.4, 5.5, 2.4, 'stone');
+      addPlatform(5.5, 19.5, -86, 2.4, 5.5, 2.4, 'stone');
+      addPlatform(0, 23.0, -86, 14.5, 1.8, 2.6, 'stone');
+      addStarPrism(0, 25.5, -86);
+
+      let rainbowSpawned = false;
+      addWindBellTarget(0, 19.8, -86, () => {
+        if (rainbowSpawned) return;
+        rainbowSpawned = true;
+        showToast('🌈 虹のボクセル橋が出現！', '東の桜渓谷へ向かう道が開かれました！');
+        for (let i = 0; i < 7; i++) {
+          const bx = 11 + i * 2.2;
+          const by = 16.5 + i * 0.9;
+          const bz = -88 - i * 4.0;
+          const cHex = rainbowPaletteHex[i % rainbowPaletteHex.length];
+          const rMats = makeShadedBoxMaterials(cHex, cHex, '#1e293b');
+          const mesh = addVoxelBoxMesh(bx, by, bz, 3.2, 0.9, 3.6, rMats, true, false, true);
+          const box = new THREE.Box3().setFromCenterAndSize(mesh.position, new THREE.Vector3(3.2, 0.9, 3.6));
+          colliders.push({ box, style: 'rainbow', mesh, size: new THREE.Vector3(3.2, 0.9, 3.6) });
+        }
+      });
+      addBouncePad(7.0, 17.0, -88, 25);
+      addGrappleOrb(15, 25, -102);
+
+      // --- ISLAND 4: Sakura Wall-Jump Canyon ---
+      addPlatform(28, 21.5, -118, 16, 4, 16, 'grass');
+      addVoxelTree(23, 23.5, -123, 'sakura');
+      addPlatform(44, 29, -113, 18, 12, 2.2, 'stone');
+      addPlatform(44, 29, -123, 18, 12, 2.2, 'stone');
+      addPlatform(44, 23, -118, 16, 1.8, 8, 'sakura');
+      addStarPrism(40, 29, -118);
+      addStarPrism(48, 32, -118);
+
+      addWindBellTarget(44, 35, -118, () => {
+        showToast('🎐 桜渓谷の風鈴が共鳴！', 'スピード＆ウインド弾がフルチャージ！');
+      });
+
+      // --- ISLAND 5: Crystal Cascade & Updraft Geyser ---
+      addPlatform(68, 26.5, -118, 20, 5, 20, 'grass');
+      addPlatform(68, 38, -125, 8, 22, 6, 'stone');
+      addPlatform(68, 37, -121.5, 5, 21, 1.5, 'water', false);
+      addUpdraftGeyser(60, 29, -125, 26);
+      addBouncePad(75, 29, -122, 29);
+      addGrappleOrb(68, 52, -135);
+      addStarPrism(60, 42, -125);
+      addStarPrism(68, 51, -125);
+
+      // --- ISLAND 6: Prism Sky-Rings Corridor ---
+      addPlatform(68, 46.5, -165, 18, 4, 18, 'stone');
+      addVoxelTree(73, 48.5, -168, 'sakura');
+      addWindBellTarget(68, 53.5, -171, () => {
+        showToast('🎐 天空回廊の風鈴！', '空中リングをくぐるとウインド弾が無限回復します！');
+      });
+
+      addSkyRing(52, 52, -175, Math.PI / 2);
+      addPlatform(44, 49, -180, 7, 2.2, 7, 'cloud');
+      addStarPrism(52, 52, -175);
+
+      addSkyRing(30, 56, -188, Math.PI / 2);
+      addGrappleOrb(24, 62, -192);
+      addStarPrism(30, 56, -188);
+
+      // --- ISLAND 7: Starlight Ancient Ruins ---
+      addPlatform(12, 56, -195, 18, 4, 18, 'stone');
+      addPlatform(6, 62, -201, 2.5, 8, 2.5, 'stone');
+      addPlatform(18, 62, -201, 2.5, 8, 2.5, 'stone');
+      addPlatform(12, 64, -195, 6, 2.2, 6, 'grass');
+      addBouncePad(5, 58, -195, 28);
+      addStarPrism(12, 68.0, -195);
+
+      addMovingCloud(-14, 65, -195, 7, 2.2, 7, 'z', 7, 1.7, 0.5);
+      addSkyRing(-26, 70, -195, Math.PI / 2);
+      addStarPrism(-14, 69, -195);
+      addStarPrism(-26, 70, -195);
+
+      // --- ISLAND 8: Summit Sanctuary (Goal Island) ---
+      addPlatform(-42, 72, -195, 24, 5, 24, 'grass');
+      addPlatform(-42, 75, -195, 10, 1.6, 10, 'stone');
+      addVoxelTree(-50, 74.5, -202, 'sakura');
+      addVoxelTree(-34, 74.5, -202, 'sakura');
+      addVoxelTree(-50, 74.5, -188, 'foliage');
+      addVoxelTree(-34, 74.5, -188, 'foliage');
+      addWindBellTarget(-48, 81, -195, () => {
+        showToast('🏆 頂上の祝福ベル達成！', 'すべての空があなたを祝福しています！');
+      });
+      addStarPrism(-42, 78.5, -195);
+      addStarPrism(-42, 84.0, -195);
+
+      // Checkpoint Beacons
+      Checkpoints.forEach((cp, idx) => {
+        const bMats = idx === 7
+          ? makeShadedBoxMaterials('#facc15', '#d97706', '#78350f')
+          : makeShadedBoxMaterials('#38bdf8', '#0284c7', '#1e3a8a');
+        cp.beaconMesh = addVoxelBoxMesh(cp.spawn.x, cp.spawn.y - 2.6, cp.spawn.z, 2.2, 0.4, 2.2, bMats, true, false, false);
+      });
+    }
+    buildCourseWorld();
+    document.getElementById('hud-stars-total').textContent = starCollectibles.length;
+    document.getElementById('hud-bells-total').textContent = windBells.length;
+
+    // Distant Scenery Voxel Clouds (with distinct blue-shaded undersides so they don't wash out)
+    const sceneryClouds = new THREE.Group();
+    scene.add(sceneryClouds);
+    for (let i = 0; i < 28; i++) {
+      const cw = 12 + (i % 5) * 6;
+      const ch = 2.8 + (i % 3) * 1.4;
+      const cd = 9 + (i % 4) * 5;
+      const g = new THREE.BoxGeometry(cw, ch, cd);
+      const m = new THREE.Mesh(g, VoxelPalettes.cloud);
+      const angle = (i / 28) * Math.PI * 2;
+      const rad = 115 + (i % 4) * 45;
+      m.position.set(
+        Math.cos(angle) * rad,
+        12 + (i % 7) * 14,
+        -95 + Math.sin(angle) * rad
+      );
+      attachEdgeOutline(m, g, true);
+      sceneryClouds.add(m);
+    }
+
+    // Floating Sakura Petals & Sunbeams Particle System
+    const particleCount = 180;
+    const particleGeo = new THREE.BufferGeometry();
+    const particlePositions = new Float32Array(particleCount * 3);
+    const particleColors = new Float32Array(particleCount * 3);
+    for (let i = 0; i < particleCount; i++) {
+      particlePositions[i * 3] = (Math.random() - 0.5) * 180;
+      particlePositions[i * 3 + 1] = Math.random() * 95;
+      particlePositions[i * 3 + 2] = -220 + Math.random() * 250;
+      const isPink = i % 2 === 0;
+      particleColors[i * 3] = isPink ? 0.96 : 0.98;
+      particleColors[i * 3 + 1] = isPink ? 0.35 : 0.82;
+      particleColors[i * 3 + 2] = isPink ? 0.65 : 0.25;
+    }
+    particleGeo.setAttribute('position', new THREE.BufferAttribute(particlePositions, 3));
+    particleGeo.setAttribute('color', new THREE.BufferAttribute(particleColors, 3));
+    const particleMat = new THREE.PointsMaterial({
+      size: 0.6,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.85
+    });
+    const ambientParticles = new THREE.Points(particleGeo, particleMat);
+    scene.add(ambientParticles);
+
+    const windOrbs = [];
+    const burstParticles = [];
+
+    function spawnBurst(pos, colorHex = '#06b6d4', count = 14) {
+      if (!settings.particles) return;
+      const mat = new THREE.MeshBasicMaterial({ color: colorHex });
+      for (let i = 0; i < count; i++) {
+        const m = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.28, 0.28), mat);
+        m.position.copy(pos);
+        const vel = new THREE.Vector3(
+          (Math.random() - 0.5) * 14,
+          Math.random() * 10 + 2,
+          (Math.random() - 0.5) * 14
+        );
+        scene.add(m);
+        burstParticles.push({ mesh: m, vel, life: 0.55 });
+      }
+    }
+
+    // =========================================================================
+    // 7. PLAYER PHYSICS, PARKOUR MECHANICS & INPUT HANDLING
+    // =========================================================================
+    const player = {
+      pos: new THREE.Vector3(0, 5, 4),
+      vel: new THREE.Vector3(0, 0, 0),
+      radius: 0.65,
+      height: 2.5,
+      eyeHeight: 1.05,
+      yaw: 0,
+      pitch: 0,
+      onGround: false,
+      coyoteTimer: 0,
+      jumpBufferTimer: 0,
+      jumpsRemaining: 2,
+      windCharges: 3,
+      maxWindCharges: 3,
+      windRechargeTimer: 0,
+      touchingWallNormal: null,
+      standingPlatform: null,
+      grappleTarget: null,
+      grappleTimer: 0,
+      peacefulFlyMode: false,
+      currentCheckpoint: 0,
+      summitCleared: false,
+      recoilKick: 0,
+      bobPhase: 0
+    };
+
+    const settings = {
+      shadows: true,
+      particles: true,
+      sensitivity: 1.0,
+      edgeMode: 2 // 2: High contrast edges, 1: Soft edges, 0: Off
+    };
+
+    const keys = {};
+    const touchMove = { forward: false, backward: false, left: false, right: false };
+    let isGameActive = false;
+    let isDraggingLook = false;
+    let lastPointerX = 0;
+    let lastPointerY = 0;
+    let runTimeSeconds = 0;
+
+    function showToast(title, sub) {
+      const banner = document.getElementById('toast-banner');
+      document.getElementById('toast-title').textContent = title;
+      document.getElementById('toast-sub').textContent = sub;
+      banner.classList.remove('opacity-0', '-translate-y-3');
+      banner.classList.add('opacity-100', 'translate-y-0');
+      clearTimeout(showToast._timer);
+      showToast._timer = setTimeout(() => {
+        banner.classList.remove('opacity-100', 'translate-y-0');
+        banner.classList.add('opacity-0', '-translate-y-3');
+      }, 3400);
+    }
+
+    function teleportToCheckpoint(cpIdx) {
+      const cp = Checkpoints[cpIdx] || Checkpoints[0];
+      player.currentCheckpoint = cpIdx;
+      player.pos.copy(cp.spawn);
+      player.vel.set(0, 0, 0);
+      player.yaw = cp.yaw || 0;
+      player.pitch = 0;
+      player.windCharges = player.maxWindCharges;
+      player.jumpsRemaining = 2;
+      player.grappleTarget = null;
+      updateHUD();
+      showToast(`🏝️ ${cp.name}`, cp.desc);
+    }
+
+    function triggerJump() {
+      if (player.peacefulFlyMode) {
+        player.vel.y = 14;
+        SoundFX.jump(false);
+        return;
+      }
+      if (player.onGround || player.coyoteTimer > 0) {
+        player.vel.y = 13.8;
+        player.onGround = false;
+        player.coyoteTimer = 0;
+        player.jumpsRemaining = 1;
+        SoundFX.jump(false);
+        return;
+      }
+      if (player.touchingWallNormal) {
+        player.vel.y = 13.5;
+        player.vel.x += player.touchingWallNormal.x * 13.5;
+        player.vel.z += player.touchingWallNormal.z * 13.5;
+        player.jumpsRemaining = Math.max(player.jumpsRemaining, 1);
+        SoundFX.wallJump();
+        spawnBurst(player.pos.clone(), '#f472b6', 10);
+        showToast('👟 ウォールキック！', '壁を蹴って華麗にジャンプ！');
+        return;
+      }
+      if (player.jumpsRemaining > 0) {
+        player.vel.y = 13.2;
+        player.jumpsRemaining--;
+        SoundFX.jump(true);
+        spawnBurst(player.pos.clone().add(new THREE.Vector3(0, -1, 0)), '#38bdf8', 10);
+      } else {
+        player.jumpBufferTimer = 0.16;
+      }
+    }
+
+    function fireWindShot() {
+      const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.getWorldQuaternion(new THREE.Quaternion())).normalize();
+      const muzzlePos = player.pos.clone().add(new THREE.Vector3(0, player.eyeHeight - 0.15, 0)).add(forward.clone().multiplyScalar(0.9));
+
+      const orbMesh = new THREE.Mesh(
+        new THREE.OctahedronGeometry(0.32, 1),
+        new THREE.MeshBasicMaterial({ color: '#00f5d4' })
+      );
+      orbMesh.position.copy(muzzlePos);
+      scene.add(orbMesh);
+      windOrbs.push({
+        mesh: orbMesh,
+        vel: forward.clone().multiplyScalar(58),
+        life: 1.4
+      });
+
+      player.recoilKick = 0.18;
+
+      const ray = new THREE.Raycaster(player.pos.clone().add(new THREE.Vector3(0, player.eyeHeight, 0)), forward, 0, 65);
+      windBells.forEach((bell) => {
+        const distToRay = ray.ray.distanceToPoint(bell.pos);
+        if (distToRay < 1.8) triggerBell(bell);
+      });
+
+      if (player.windCharges > 0 || player.peacefulFlyMode) {
+        if (!player.peacefulFlyMode) player.windCharges--;
+        const isLookingDown = forward.y < -0.45;
+        const nearSurface = player.onGround || player.coyoteTimer > 0 || player.touchingWallNormal !== null;
+        const boostStrength = (isLookingDown && nearSurface) ? 21.5 : 15.5;
+
+        const impulse = forward.clone().multiplyScalar(-boostStrength);
+        if (impulse.y > 0) {
+          player.vel.y = Math.max(player.vel.y * 0.4, 0) + impulse.y;
+        } else {
+          player.vel.y += impulse.y * 0.5;
+        }
+        player.vel.x += impulse.x * 0.85;
+        player.vel.z += impulse.z * 0.85;
+        player.onGround = false;
+
+        SoundFX.windShot(isLookingDown && nearSurface);
+        spawnBurst(muzzlePos, '#06b6d4', 14);
+        flashSpeedLines();
+        updateHUD();
+      } else {
+        SoundFX.windShot(false);
+      }
+    }
+
+    function findBestGrapplePoint() {
+      const eyePos = player.pos.clone().add(new THREE.Vector3(0, player.eyeHeight, 0));
+      const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.getWorldQuaternion(new THREE.Quaternion())).normalize();
+
+      let best = null;
+      let bestScore = 0.82;
+      grapplePoints.forEach((gp) => {
+        const toGP = gp.pos.clone().sub(eyePos);
+        const dist = toGP.length();
+        if (dist < 48 && dist > 2) {
+          const dot = forward.dot(toGP.normalize());
+          if (dot > bestScore) {
+            bestScore = dot;
+            best = gp.pos.clone();
+          }
+        }
+      });
+      if (best) return best;
+
+      const meshes = colliders.map(c => c.mesh).filter(Boolean);
+      const ray = new THREE.Raycaster(eyePos, forward, 1.5, 36);
+      const hits = ray.intersectObjects(meshes, false);
+      if (hits.length > 0) return hits[0].point.clone();
+      return null;
+    }
+
+    function triggerGrapple() {
+      const target = findBestGrapplePoint();
+      if (!target) {
+        showToast('✨ 光グラップル', '36m以内の島ブロックや空中オーブを狙って撃とう！');
+        return;
+      }
+      player.grappleTarget = target;
+      player.grappleTimer = 0.65;
+      player.onGround = false;
+      player.jumpsRemaining = Math.max(player.jumpsRemaining, 1);
+      SoundFX.grapple();
+      spawnBurst(target, '#facc15', 12);
+      flashSpeedLines();
+    }
+
+    function triggerBell(bell) {
+      SoundFX.bellHit();
+      spawnBurst(bell.pos, '#f472b6', 22);
+      player.windCharges = player.maxWindCharges;
+      if (!bell.triggered) {
+        bell.triggered = true;
+        bell.dome.material = makeShadedBoxMaterials('#facc15', '#d97706', '#78350f');
+        if (bell.onHit) bell.onHit();
+        updateHUD();
+      }
+    }
+
+    function flashSpeedLines() {
+      const el = document.getElementById('speed-lines');
+      el.style.opacity = '1';
+      clearTimeout(flashSpeedLines._t);
+      flashSpeedLines._t = setTimeout(() => { el.style.opacity = '0'; }, 280);
+    }
+
+    // =========================================================================
+    // 8. UI & EVENT LISTENERS
+    // =========================================================================
+    function updateHUD() {
+      const cp = Checkpoints[player.currentCheckpoint] || Checkpoints[0];
+      document.getElementById('hud-island-name').textContent = cp.name;
+      document.getElementById('hud-checkpoint-num').textContent = `CP ${player.currentCheckpoint + 1} / ${Checkpoints.length}`;
+      const progressPct = Math.round(((player.currentCheckpoint + 1) / Checkpoints.length) * 100);
+      document.getElementById('hud-progress-bar').style.width = `${progressPct}%`;
+
+      const starsGot = starCollectibles.filter(s => s.collected).length;
+      const bellsGot = windBells.filter(b => b.triggered).length;
+      document.getElementById('hud-stars').textContent = starsGot;
+      document.getElementById('hud-bells').textContent = bellsGot;
+
+      document.getElementById('hud-wind-text').textContent =
+        player.peacefulFlyMode ? '∞ 空中散歩モード' : `${player.windCharges} / ${player.maxWindCharges} 充填完了`;
+      for (let i = 1; i <= 3; i++) {
+        const pip = document.getElementById(`wind-pip-${i}`);
+        if (player.peacefulFlyMode || player.windCharges >= i) {
+          pip.className = 'h-2.5 rounded-full bg-gradient-to-r from-cyan-400 to-sky-400 shadow-[0_0_8px_rgba(34,211,238,0.5)] transition-all';
+        } else {
+          pip.className = 'h-2.5 rounded-full bg-slate-700 transition-all';
+        }
+      }
+
+      const badge = document.getElementById('jump-state-badge');
+      if (player.peacefulFlyMode) {
+        badge.textContent = '自由飛行 🕊️';
+        badge.className = 'px-2 py-0.5 rounded-md bg-teal-500/30 text-teal-200 border border-teal-400/40';
+      } else if (player.onGround) {
+        badge.textContent = '地上OK (2段可)';
+        badge.className = 'px-2 py-0.5 rounded-md bg-emerald-500/30 text-emerald-200 border border-emerald-400/40';
+      } else if (player.touchingWallNormal) {
+        badge.textContent = '壁キック可能！';
+        badge.className = 'px-2 py-0.5 rounded-md bg-pink-500/30 text-pink-200 border border-pink-400/40';
+      } else if (player.jumpsRemaining > 0) {
+        badge.textContent = `空中ジャンプ残${player.jumpsRemaining}`;
+        badge.className = 'px-2 py-0.5 rounded-md bg-sky-500/30 text-sky-200 border border-sky-400/40';
+      } else {
+        badge.textContent = '風ショット可💨';
+        badge.className = 'px-2 py-0.5 rounded-md bg-amber-500/30 text-amber-200 border border-amber-400/40';
+      }
+    }
+
+    function renderWarpMenu() {
+      const grid = document.getElementById('warp-grid');
+      grid.innerHTML = '';
+      Checkpoints.forEach((cp, idx) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        const isCurrent = idx === player.currentCheckpoint;
+        btn.className = `voxel-btn text-left p-3 rounded-2xl border transition-all flex items-center justify-between ${
+          isCurrent
+            ? 'bg-sky-50 border-sky-500 shadow-sm'
+            : 'bg-white hover:bg-sky-50/60 border-slate-200'
+        }`;
+        btn.innerHTML = `
+          <div>
+            <div class="text-xs sm:text-sm font-extrabold text-slate-800">${cp.name}</div>
+            <div class="text-[11px] text-slate-500">${cp.desc}</div>
+          </div>
+          <span class="text-xs font-bold px-2.5 py-1 rounded-xl ${
+            isCurrent ? 'bg-sky-600 text-white' : 'bg-slate-100 text-slate-700'
+          }">${isCurrent ? '現在地' : 'ワープ'}</span>
+        `;
+        btn.addEventListener('click', () => {
+          teleportToCheckpoint(idx);
+          document.getElementById('warp-modal').classList.add('hidden');
+          isGameActive = true;
+        });
+        grid.appendChild(btn);
+      });
+    }
+
+    window.addEventListener('keydown', (e) => {
+      keys[e.code] = true;
+      if (e.code === 'Space') {
+        e.preventDefault();
+        if (isGameActive) triggerJump();
+      } else if (e.code === 'KeyE') {
+        if (isGameActive) triggerGrapple();
+      } else if (e.code === 'KeyR') {
+        if (isGameActive) teleportToCheckpoint(player.currentCheckpoint);
+      } else if (e.code === 'KeyF') {
+        togglePeacefulFly();
+      }
+    });
+
+    window.addEventListener('keyup', (e) => {
+      keys[e.code] = false;
+    });
+
+    canvas.addEventListener('mousedown', (e) => {
+      if (!isGameActive) return;
+      if (document.pointerLockElement !== canvas) {
+        isDraggingLook = true;
+        lastPointerX = e.clientX;
+        lastPointerY = e.clientY;
+        if (canvas.requestPointerLock) {
+          try { canvas.requestPointerLock(); } catch (_) {}
+        }
+      }
+      if (e.button === 0) fireWindShot();
+      else if (e.button === 2) triggerGrapple();
+    });
+
+    window.addEventListener('mouseup', () => { isDraggingLook = false; });
+    window.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    window.addEventListener('mousemove', (e) => {
+      if (!isGameActive) return;
+      const sens = 0.0022 * settings.sensitivity;
+      if (document.pointerLockElement === canvas) {
+        player.yaw -= e.movementX * sens;
+        player.pitch = Math.max(-1.48, Math.min(1.48, player.pitch - e.movementY * sens));
+      } else if (isDraggingLook) {
+        const dx = e.clientX - lastPointerX;
+        const dy = e.clientY - lastPointerY;
+        lastPointerX = e.clientX;
+        lastPointerY = e.clientY;
+        player.yaw -= dx * sens * 1.3;
+        player.pitch = Math.max(-1.48, Math.min(1.48, player.pitch - dy * sens * 1.3));
+      }
+    });
+
+    let touchLookId = null;
+    canvas.addEventListener('touchstart', (e) => {
+      if (!isGameActive) return;
+      const t = e.changedTouches[0];
+      touchLookId = t.identifier;
+      lastPointerX = t.clientX;
+      lastPointerY = t.clientY;
+    }, { passive: true });
+
+    canvas.addEventListener('touchmove', (e) => {
+      if (!isGameActive || touchLookId === null) return;
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const t = e.changedTouches[i];
+        if (t.identifier === touchLookId) {
+          const dx = t.clientX - lastPointerX;
+          const dy = t.clientY - lastPointerY;
+          lastPointerX = t.clientX;
+          lastPointerY = t.clientY;
+          const sens = 0.004 * settings.sensitivity;
+          player.yaw -= dx * sens;
+          player.pitch = Math.max(-1.45, Math.min(1.45, player.pitch - dy * sens));
+        }
+      }
+    }, { passive: true });
+
+    canvas.addEventListener('touchend', () => { touchLookId = null; }, { passive: true });
+
+    document.querySelectorAll('[data-move]').forEach((btn) => {
+      const dir = btn.getAttribute('data-move');
+      const start = (e) => { e.preventDefault(); touchMove[dir] = true; };
+      const end = (e) => { e.preventDefault(); touchMove[dir] = false; };
+      btn.addEventListener('mousedown', start);
+      btn.addEventListener('mouseup', end);
+      btn.addEventListener('mouseleave', end);
+      btn.addEventListener('touchstart', start, { passive: false });
+      btn.addEventListener('touchend', end, { passive: false });
+      btn.addEventListener('touchcancel', end, { passive: false });
+    });
+
+    document.getElementById('btn-action-jump').addEventListener('click', () => {
+      isGameActive = true;
+      triggerJump();
+    });
+    document.getElementById('btn-action-wind').addEventListener('click', () => {
+      isGameActive = true;
+      fireWindShot();
+    });
+    document.getElementById('btn-action-grapple').addEventListener('click', () => {
+      isGameActive = true;
+      triggerGrapple();
+    });
+
+    // Edge Contrast Toggle Button
+    document.getElementById('btn-contrast').addEventListener('click', () => {
+      settings.edgeMode = (settings.edgeMode + 1) % 3;
+      const labels = ['輪郭強調: OFF', '輪郭強調: 標準', '輪郭強調: 強'];
+      document.getElementById('edge-label').textContent = labels[settings.edgeMode];
+      const opacities = [0, 0.32, 0.58];
+      darkEdgeMat.opacity = opacities[settings.edgeMode];
+      cloudEdgeMat.opacity = opacities[settings.edgeMode] * 0.85;
+      allEdgeLines.forEach((l) => { l.visible = settings.edgeMode > 0; });
+    });
+
+    document.getElementById('btn-weather').addEventListener('click', () => {
+      applyWeather(currentWeatherIdx + 1);
+    });
+
+    function togglePeacefulFly(forceState = null) {
+      player.peacefulFlyMode = forceState !== null ? forceState : !player.peacefulFlyMode;
+      document.getElementById('fly-label').textContent =
+        player.peacefulFlyMode ? '空中散歩ON' : '通常パルクール';
+      if (player.peacefulFlyMode) {
+        player.vel.y = Math.max(player.vel.y, 2);
+        showToast('🕊️ ピースフル空中散歩モード ON', '落下せずにどこでも自由に空中ジャンプ＆飛行できます！');
+      } else {
+        showToast('🏃‍♂️ 通常パルクールモード', 'ジャンプ＆風ランチャーで島々を駆け抜けよう！');
+      }
+      updateHUD();
+    }
+
+    document.getElementById('btn-peaceful-fly').addEventListener('click', () => togglePeacefulFly());
+
+    document.getElementById('btn-warp-menu').addEventListener('click', () => {
+      if (document.pointerLockElement) document.exitPointerLock();
+      renderWarpMenu();
+      document.getElementById('warp-modal').classList.remove('hidden');
+    });
+
+    document.getElementById('btn-close-warp').addEventListener('click', () => {
+      document.getElementById('warp-modal').classList.add('hidden');
+    });
+
+    document.getElementById('btn-reset-run').addEventListener('click', () => {
+      resetFullRun();
+      document.getElementById('warp-modal').classList.add('hidden');
+    });
+
+    document.getElementById('btn-respawn').addEventListener('click', () => {
+      teleportToCheckpoint(player.currentCheckpoint);
+    });
+
+    document.getElementById('btn-audio').addEventListener('click', () => {
+      const m = SoundFX.toggleMute();
+      document.getElementById('audio-icon').textContent = m ? '🔇' : '🔊';
+    });
+
+    document.getElementById('btn-help').addEventListener('click', () => {
+      if (document.pointerLockElement) document.exitPointerLock();
+      isGameActive = false;
+      document.getElementById('welcome-modal').classList.remove('hidden');
+    });
+
+    document.getElementById('btn-start-play').addEventListener('click', () => {
+      document.getElementById('welcome-modal').classList.add('hidden');
+      isGameActive = true;
+      SoundFX.jump(false);
+      if (canvas.requestPointerLock) {
+        try { canvas.requestPointerLock(); } catch (_) {}
+      }
+    });
+
+    document.getElementById('btn-start-freefly').addEventListener('click', () => {
+      document.getElementById('welcome-modal').classList.add('hidden');
+      isGameActive = true;
+      togglePeacefulFly(true);
+    });
+
+    document.getElementById('chk-shadows').addEventListener('change', (e) => {
+      settings.shadows = e.target.checked;
+      renderer.shadowMap.enabled = settings.shadows;
+      sunLight.castShadow = settings.shadows;
+      scene.traverse((obj) => {
+        if (obj.material) obj.material.needsUpdate = true;
+      });
+    });
+
+    document.getElementById('chk-particles').addEventListener('change', (e) => {
+      settings.particles = e.target.checked;
+      ambientParticles.visible = settings.particles;
+    });
+
+    document.getElementById('slider-sens').addEventListener('input', (e) => {
+      settings.sensitivity = parseFloat(e.target.value) || 1.0;
+    });
+
+    document.getElementById('btn-clear-continue').addEventListener('click', () => {
+      document.getElementById('clear-modal').classList.add('hidden');
+      isGameActive = true;
+    });
+
+    document.getElementById('btn-clear-replay').addEventListener('click', () => {
+      document.getElementById('clear-modal').classList.add('hidden');
+      resetFullRun();
+      isGameActive = true;
+    });
+
+    function resetFullRun() {
+      runTimeSeconds = 0;
+      player.summitCleared = false;
+      starCollectibles.forEach((s) => {
+        s.collected = false;
+        s.mesh.visible = true;
+      });
+      windBells.forEach((b) => {
+        b.triggered = false;
+        b.dome.material = makeShadedBoxMaterials('#f472b6', '#db2777', '#831843');
+      });
+      teleportToCheckpoint(0);
+    }
+
+    function formatTime(sec) {
+      const m = Math.floor(sec / 60);
+      const s = (sec % 60).toFixed(1);
+      return `${String(m).padStart(2, '0')}:${s.padStart(4, '0')}`;
+    }
+
+    // =========================================================================
+    // 9. MAIN GAME LOOP
+    // =========================================================================
+    let lastFrameTime = performance.now();
+    let animFrameId = null;
+
+    function updatePhysicsAndWorld(dt, elapsedSec) {
+      movingPlatforms.forEach((mp) => {
+        const prevPos = mp.mesh.position.clone();
+        const offset = Math.sin(elapsedSec * mp.speed + mp.phase) * mp.amp;
+        mp.mesh.position.copy(mp.basePos);
+        mp.mesh.position[mp.axis] += offset;
+        mp.lastDelta.copy(mp.mesh.position).sub(prevPos);
+        mp.collider.box.setFromCenterAndSize(mp.mesh.position, mp.collider.size);
+      });
+
+      if (player.onGround && player.standingPlatform) {
+        const mp = movingPlatforms.find(m => m.collider === player.standingPlatform);
+        if (mp) player.pos.add(mp.lastDelta);
+      }
+
+      if (keys['KeyQ']) player.yaw += 1.8 * dt;
+      if (keys['KeyE'] && !isGameActive) player.yaw -= 1.8 * dt;
+
+      let moveForward = (keys['KeyW'] || keys['ArrowUp'] || touchMove.forward ? 1 : 0) -
+                        (keys['KeyS'] || keys['ArrowDown'] || touchMove.backward ? 1 : 0);
+      let moveRight = (keys['KeyD'] || keys['ArrowRight'] || touchMove.right ? 1 : 0) -
+                      (keys['KeyA'] || keys['ArrowLeft'] || touchMove.left ? 1 : 0);
+
+      const moveDir = new THREE.Vector3(moveRight, 0, -moveForward);
+      if (moveDir.lengthSq() > 0) moveDir.normalize();
+      moveDir.applyAxisAngle(new THREE.Vector3(0, 1, 0), player.yaw);
+
+      const isSprinting = keys['ShiftLeft'] || keys['ShiftRight'];
+      const targetSpeed = player.peacefulFlyMode ? 18.0 : (isSprinting ? 14.2 : 10.8);
+      const accel = player.onGround ? 14.0 : 6.5;
+
+      player.vel.x = THREE.MathUtils.lerp(player.vel.x, moveDir.x * targetSpeed, Math.min(1, accel * dt));
+      player.vel.z = THREE.MathUtils.lerp(player.vel.z, moveDir.z * targetSpeed, Math.min(1, accel * dt));
+
+      if (player.grappleTarget && player.grappleTimer > 0) {
+        player.grappleTimer -= dt;
+        const toTarget = player.grappleTarget.clone().sub(player.pos);
+        const dist = toTarget.length();
+        if (dist < 2.6 || player.grappleTimer <= 0) {
+          player.grappleTarget = null;
+          player.vel.y = Math.max(player.vel.y, 11.5);
+          grappleLine.visible = false;
+        } else {
+          toTarget.normalize();
+          player.vel.copy(toTarget.multiplyScalar(34));
+          grappleLine.visible = true;
+          const handWorld = new THREE.Vector3();
+          launcherVM.coreCrystal.getWorldPosition(handWorld);
+          grappleLineGeo.setFromPoints([handWorld, player.grappleTarget]);
+        }
+      } else {
+        grappleLine.visible = false;
+      }
+
+      if (!player.grappleTarget) {
+        if (player.peacefulFlyMode) {
+          player.vel.y *= 0.90;
+          if (keys['ControlLeft'] || keys['KeyC']) player.vel.y = -11;
+        } else {
+          player.vel.y -= 28.5 * dt;
+          if (player.vel.y < -38) player.vel.y = -38;
+        }
+      }
+
+      const pBox = new THREE.Box3().setFromCenterAndSize(
+        player.pos,
+        new THREE.Vector3(player.radius * 2, player.height, player.radius * 2)
+      );
+      updraftZones.forEach((uz) => {
+        if (uz.rings) {
+          uz.rings.forEach((r, idx) => {
+            const frac = ((elapsedSec * 0.55) + idx * 0.25) % 1.0;
+            r.position.y = (frac - 0.5) * uz.height;
+          });
+        }
+        if (pBox.intersectsBox(uz.box)) {
+          player.vel.y = Math.min(22, player.vel.y + 52 * dt);
+          player.onGround = false;
+          player.jumpsRemaining = 2;
+        }
+      });
+      grapplePoints.forEach((gp, idx) => {
+        if (gp.haloFrame) {
+          gp.haloFrame.rotation.y = elapsedSec * 1.4 + idx;
+        }
+      });
+
+      player.onGround = false;
+      player.touchingWallNormal = null;
+      player.standingPlatform = null;
+
+      player.pos.x += player.vel.x * dt;
+      player.pos.z += player.vel.z * dt;
+      let horizBox = new THREE.Box3().setFromCenterAndSize(
+        player.pos,
+        new THREE.Vector3(player.radius * 2, player.height - 0.3, player.radius * 2)
+      );
+
+      for (let i = 0; i < colliders.length; i++) {
+        const c = colliders[i];
+        if (horizBox.intersectsBox(c.box)) {
+          const overlapX1 = c.box.max.x - horizBox.min.x;
+          const overlapX2 = horizBox.max.x - c.box.min.x;
+          const overlapZ1 = c.box.max.z - horizBox.min.z;
+          const overlapZ2 = horizBox.max.z - c.box.min.z;
+          const minOverlapX = overlapX1 < overlapX2 ? overlapX1 : -overlapX2;
+          const minOverlapZ = overlapZ1 < overlapZ2 ? overlapZ1 : -overlapZ2;
+
+          if (Math.abs(minOverlapX) < Math.abs(minOverlapZ)) {
+            player.pos.x += minOverlapX;
+            player.vel.x = 0;
+            player.touchingWallNormal = new THREE.Vector3(Math.sign(minOverlapX), 0, 0);
+          } else {
+            player.pos.z += minOverlapZ;
+            player.vel.z = 0;
+            player.touchingWallNormal = new THREE.Vector3(0, 0, Math.sign(minOverlapZ));
+          }
+          horizBox.setFromCenterAndSize(
+            player.pos,
+            new THREE.Vector3(player.radius * 2, player.height - 0.3, player.radius * 2)
+          );
+        }
+      }
+
+      player.pos.y += player.vel.y * dt;
+      let vertBox = new THREE.Box3().setFromCenterAndSize(
+        player.pos,
+        new THREE.Vector3(player.radius * 1.75, player.height, player.radius * 1.75)
+      );
+
+      for (let i = 0; i < colliders.length; i++) {
+        const c = colliders[i];
+        if (vertBox.intersectsBox(c.box)) {
+          if (player.vel.y <= 0 && player.pos.y >= c.box.max.y - 0.5) {
+            player.pos.y = c.box.max.y + player.height / 2;
+            player.vel.y = 0;
+            player.onGround = true;
+            player.standingPlatform = c;
+          } else if (player.vel.y > 0 && player.pos.y < c.box.min.y) {
+            player.pos.y = c.box.min.y - player.height / 2;
+            player.vel.y = 0;
+          }
+          vertBox.setFromCenterAndSize(
+            player.pos,
+            new THREE.Vector3(player.radius * 1.75, player.height, player.radius * 1.75)
+          );
+        }
+      }
+
+      if (player.onGround) {
+        player.coyoteTimer = 0.14;
+        player.jumpsRemaining = 2;
+        if (player.windCharges < player.maxWindCharges) {
+          player.windCharges = player.maxWindCharges;
+          updateHUD();
+        }
+        if (player.jumpBufferTimer > 0) {
+          player.jumpBufferTimer = 0;
+          triggerJump();
+        }
+      } else {
+        player.coyoteTimer = Math.max(0, player.coyoteTimer - dt);
+        player.jumpBufferTimer = Math.max(0, player.jumpBufferTimer - dt);
+        if (player.windCharges < player.maxWindCharges) {
+          player.windRechargeTimer += dt;
+          if (player.windRechargeTimer > 2.4) {
+            player.windRechargeTimer = 0;
+            player.windCharges++;
+            updateHUD();
+          }
+        }
+      }
+
+      bouncePads.forEach((bp) => {
+        if (vertBox.intersectsBox(bp.box)) {
+          player.vel.y = bp.power;
+          player.onGround = false;
+          player.jumpsRemaining = 2;
+          player.windCharges = player.maxWindCharges;
+          SoundFX.bouncePad();
+          spawnBurst(bp.mesh.position, '#facc15', 16);
+          flashSpeedLines();
+          updateHUD();
+        }
+        bp.mesh.position.y = bp.baseY + Math.sin(elapsedSec * 5) * 0.08;
+      });
+
+      skyRings.forEach((sr) => {
+        sr.mesh.rotation.z = elapsedSec * 1.2;
+        if (player.pos.distanceTo(sr.pos) < sr.radius) {
+          if (player.windCharges < player.maxWindCharges || player.jumpsRemaining < 2) {
+            player.windCharges = player.maxWindCharges;
+            player.jumpsRemaining = 2;
+            player.vel.y = Math.max(player.vel.y, 10.5);
+            SoundFX.checkpoint();
+            spawnBurst(sr.pos, '#06b6d4', 14);
+            showToast('💠 プリズムリング通過！', 'ウインド弾＆空中ジャンプが全回復！');
+            updateHUD();
+          }
+        }
+      });
+
+      starCollectibles.forEach((star) => {
+        if (star.collected) return;
+        star.mesh.rotation.y = elapsedSec * 2.2;
+        star.mesh.position.y = star.pos.y + Math.sin(elapsedSec * 3.2 + star.id) * 0.35;
+        if (player.pos.distanceTo(star.mesh.position) < 2.35) {
+          star.collected = true;
+          star.mesh.visible = false;
+          SoundFX.starCollect();
+          spawnBurst(star.pos, '#facc15', 18);
+          updateHUD();
+          const got = starCollectibles.filter(s => s.collected).length;
+          showToast(`⭐ 星のかけら GET! (${got}/${starCollectibles.length})`, 'キラキラ輝く天空のエネルギー！');
+        }
+      });
+
+      Checkpoints.forEach((cp, idx) => {
+        if (player.pos.distanceTo(cp.spawn) < 8.5) {
+          if (idx > player.currentCheckpoint) {
+            player.currentCheckpoint = idx;
+            SoundFX.checkpoint();
+            spawnBurst(cp.spawn, '#38bdf8', 22);
+            updateHUD();
+            showToast(`✨ チェックポイント更新: ${cp.name}`, cp.desc);
+          }
+          if (idx === Checkpoints.length - 1 && !player.summitCleared) {
+            player.summitCleared = true;
+            SoundFX.bouncePad();
+            spawnBurst(cp.spawn.clone().add(new THREE.Vector3(0, 4, 0)), '#facc15', 40);
+            document.getElementById('clear-time').textContent = formatTime(runTimeSeconds);
+            document.getElementById('clear-stars').textContent =
+              `${starCollectibles.filter(s => s.collected).length} / ${starCollectibles.length}`;
+            document.getElementById('clear-bells').textContent =
+              `${windBells.filter(b => b.triggered).length} / ${windBells.length}`;
+            if (document.pointerLockElement) document.exitPointerLock();
+            document.getElementById('clear-modal').classList.remove('hidden');
+          }
+        }
+      });
+
+      if (player.pos.y < -18) {
+        if (player.peacefulFlyMode) {
+          player.pos.y = 10;
+          player.vel.y = 12;
+        } else {
+          SoundFX.jump(true);
+          teleportToCheckpoint(player.currentCheckpoint);
+          showToast('☁️ ふわふわ雲がキャッチ！', '直前のチェックポイント島へふんわり戻りました');
+        }
+      }
+
+      for (let i = windOrbs.length - 1; i >= 0; i--) {
+        const o = windOrbs[i];
+        o.life -= dt;
+        o.mesh.position.addScaledVector(o.vel, dt);
+        o.mesh.rotation.x += 8 * dt;
+        o.mesh.rotation.y += 8 * dt;
+        windBells.forEach((bell) => {
+          if (o.mesh.position.distanceTo(bell.pos) < 2.2) {
+            triggerBell(bell);
+            o.life = 0;
+          }
+        });
+        if (o.life <= 0) {
+          scene.remove(o.mesh);
+          windOrbs.splice(i, 1);
+        }
+      }
+
+      for (let i = burstParticles.length - 1; i >= 0; i--) {
+        const bp = burstParticles[i];
+        bp.life -= dt;
+        bp.vel.y -= 18 * dt;
+        bp.mesh.position.addScaledVector(bp.vel, dt);
+        bp.mesh.scale.setScalar(Math.max(0.01, bp.life * 1.8));
+        if (bp.life <= 0) {
+          scene.remove(bp.mesh);
+          burstParticles.splice(i, 1);
+        }
+      }
+
+      if (settings.particles) {
+        const posAttr = particleGeo.attributes.position;
+        for (let i = 0; i < particleCount; i++) {
+          let py = posAttr.getY(i) - 1.4 * dt;
+          let px = posAttr.getX(i) + Math.sin(elapsedSec + i) * 0.8 * dt;
+          if (py < -5) py = 90;
+          posAttr.setXY(i, px, py);
+        }
+        posAttr.needsUpdate = true;
+      }
+
+      playerRig.position.copy(player.pos).add(new THREE.Vector3(0, player.eyeHeight, 0));
+      camera.rotation.order = 'YXZ';
+      camera.rotation.y = player.yaw;
+      camera.rotation.x = player.pitch;
+
+      const horizontalSpeed = Math.hypot(player.vel.x, player.vel.z);
+      const totalSpeed = player.vel.length();
+      const targetFov = 78 + Math.min(16, Math.max(0, (totalSpeed - 10) * 0.75));
+      camera.fov = THREE.MathUtils.lerp(camera.fov, targetFov, 8 * dt);
+      camera.updateProjectionMatrix();
+
+      if (player.onGround && horizontalSpeed > 1.0) {
+        player.bobPhase += horizontalSpeed * dt * 0.9;
+      }
+      player.recoilKick = THREE.MathUtils.lerp(player.recoilKick, 0, 12 * dt);
+      viewmodelGroup.position.x = 0.42 + Math.cos(player.bobPhase) * 0.018;
+      viewmodelGroup.position.y = -0.36 + Math.abs(Math.sin(player.bobPhase)) * 0.022;
+      viewmodelGroup.position.z = -0.62 + player.recoilKick;
+      launcherVM.coreCrystal.rotation.y += 3.5 * dt;
+      launcherVM.nozzleRing.rotation.z -= 2.0 * dt;
+
+      const canGrapple = findBestGrapplePoint() !== null;
+      const reticleOuter = document.getElementById('reticle-outer');
+      const reticleHint = document.getElementById('reticle-hint');
+      if (canGrapple) {
+        reticleOuter.classList.add('scale-125', 'border-amber-400');
+        reticleHint.classList.remove('hidden');
+      } else {
+        reticleOuter.classList.remove('scale-125', 'border-amber-400');
+        reticleHint.classList.add('hidden');
+      }
+
+      document.getElementById('hud-speed').textContent = horizontalSpeed.toFixed(1);
+      document.getElementById('hud-altitude').textContent = `${Math.round(player.pos.y)}m`;
+      if (isGameActive && !player.summitCleared) {
+        runTimeSeconds += dt;
+        document.getElementById('hud-timer').textContent = formatTime(runTimeSeconds);
+      }
+    }
+
+    function animate(now) {
+      animFrameId = requestAnimationFrame(animate);
+      const dt = Math.min(0.05, (now - lastFrameTime) / 1000);
+      lastFrameTime = now;
+
+      updatePhysicsAndWorld(dt, now / 1000);
+      renderer.render(scene, camera);
+    }
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    window.onload = () => {
+      teleportToCheckpoint(0);
+      if (animFrameId) cancelAnimationFrame(animFrameId);
+      lastFrameTime = performance.now();
+      animFrameId = requestAnimationFrame(animate);
+    };
+  </script>
+</body>
+</html>
